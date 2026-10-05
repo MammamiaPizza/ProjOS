@@ -1,0 +1,7 @@
+1|1791208183|398.36|0.00|32.55|127|1296|443|/mnt/d/Code/OS_Tet/proj|wsl -d Ubuntu
+2|1791208244|7.82|7.47|0.00|0|1351|1299|/mnt/d/Code/OS_Tet/proj|echo hello
+3|1791209581|2.04|0.25|0.00|127|1484|1369|/mnt/d/Code/OS_Tet/proj|/mnt/d/Code/OS_Tet/proj>
+4|1791209594|6.94|2.50|0.00|0|1485|1369|/mnt/d/Code/OS_Tet/proj|clear
+5|1791209630|305.95|0.00|32.51|127|1487|1369|/mnt/d/Code/OS_Tet/proj|wsl --w ubuntu
+6|1791209633|20.74|4.05|12.16|0|1488|1369|/mnt/d/Code/OS_Tet/proj|ls
+7|1791209662|12.56|0.00|8.79|0|1509|1369|/mnt/d/Code/OS_Tet/proj|ls
