@@ -1,358 +1,301 @@
-# Enhanced Command History & Replay Tool
+# Command History & Replay Tool (v2)
 
-A POSIX-based command wrapper with **persistent history**, **advanced tracking**, and **8 major improvements** over the original design.
+A terminal **flight recorder**. It runs your commands through POSIX system calls and records
+*how each one behaved* — wall time, CPU time, peak memory, exit code — then lets you search,
+replay, retry, time-limit and analyse them.
 
----
+Implements **Tier A + B + C** of `command_history_replay_proposal.md`, plus a hand-rolled
+`termios` line editor and a `linux` / `shell` execution-mode toggle.
 
-## 🚀 New Features Implemented
-
-### 1. **Dynamic Memory Management**
-- No fixed `MAX_HISTORY` limit
-- History array grows automatically with `realloc()`
-- Starts at 100 entries, doubles when full
-- All strings dynamically allocated
-
-### 2. **Better Command Parsing**
-- Handles quoted strings: `echo "hello world"`
-- Supports escaped characters: `echo hello\ world`
-- Proper tokenizer with quote state tracking
-- Single and double quote support
-
-### 3. **Process Group Control**
-- Each command runs in its own process group via `setpgid()`
-- Better cleanup of child processes
-- `SIGCHLD` handler prevents zombie processes
-- Graceful `SIGINT` (Ctrl+C) handling
-
-### 4. **CPU Time Tracking**
-- Measures **wall-clock time** (real elapsed time)
-- Tracks **CPU user time** (user-space execution)
-- Tracks **CPU system time** (kernel-space execution)
-- Uses `getrusage(RUSAGE_CHILDREN)` for accurate metrics
-- Distinguishes I/O wait from actual CPU usage
-
-### 5. **Environment & Context Tracking**
-- Logs working directory for each command (`getcwd()`)
-- Built-in `cd` command support
-- `replay` automatically changes to original directory
-- Directory shown in prompt (with `~` for home)
-
-### 6. **Session Tracking**
-- Records **PID** of each executed command
-- Records **Session ID** of the tool instance
-- Distinguish commands from different terminal sessions
-- New `info` command shows session details
-
-### 7. **Security Hardening**
-- Command blacklist (blocks `rm -rf /`, fork bombs, etc.)
-- Path resolution with `realpath()` prevents traversal attacks
-- Validates command exists before execution
-- Warnings for sensitive file access (`/etc/shadow`, `/etc/passwd`)
-
-### 8. **Terminal Control (Line Editing)**
-- **Arrow key navigation**: Up/Down for history recall
-- **Backspace/Delete**: Proper line editing
-- **Raw mode terminal**: Character-by-character input
-- **Ctrl+C**: Graceful interrupt
-- **Ctrl+D**: EOF handling
-- Bash-like REPL experience
+Single C file, no external libraries: `command_history_tool.c` (1799 lines).
 
 ---
 
-## 📦 System Calls Used
+## Build & run
 
-| Category | System Calls | Purpose |
-|----------|--------------|---------|
-| **Process Control** | `fork()`, `execvp()`, `waitpid()`, `setpgid()`, `getpgrp()` | Create and manage child processes |
-| **Time Measurement** | `clock_gettime()`, `getrusage()`, `time()` | Wall-clock and CPU time tracking |
-| **File I/O** | `open()`, `read()`, `write()`, `close()` | Low-level log file operations |
-| **Memory** | `malloc()`, `realloc()`, `free()`, `strdup()` | Dynamic history array |
-| **Signals** | `sigaction()`, `signal()` | SIGINT and SIGCHLD handling |
-| **Terminal** | `tcgetattr()`, `tcsetattr()` | Raw mode for line editing |
-| **Environment** | `getcwd()`, `chdir()`, `getenv()` | Working directory tracking |
-| **Session** | `getpid()`, `getsid()`, `getppid()` | Process/session identification |
-| **Security** | `realpath()`, `access()`, `stat()` | Path validation and command resolution |
+**This is POSIX-only code.** It uses `fork`, `execvp`, `wait4`, `setpgid`, `pipe`, `dup2`,
+`termios` and `alarm`. It **cannot** be built or run on native Windows / MinGW / PowerShell.
+On a Windows machine you must cross into WSL first.
 
----
+### From Windows PowerShell
 
-## 🔧 Build & Run
-
-```bash
-# Compile with optimizations and all warnings
-gcc -O2 -Wall -Wextra command_history_tool.c -o history_tool
-
-# Run the tool
+```powershell
+wsl -d Ubuntu
+cd /mnt/d/Code/OS_Tet/proj
+make
 ./history_tool
 ```
 
-**Requirements:**
-- Linux or POSIX-compliant OS
-- GCC or compatible C compiler
-- Standard POSIX libraries
+If `wsl` drops you into a distro with no shell (e.g. `docker-desktop`), always pass `-d Ubuntu`.
 
----
-
-## 📝 Usage
-
-### Built-in Commands
-
-| Command | Description |
-|---------|-------------|
-| `history` | Show all commands with full metadata |
-| `replay <id>` | Re-run command #id (restores working directory) |
-| `search <keyword>` | Find commands containing keyword |
-| `stats` | Show statistics: most used, slowest, success rate |
-| `cd <path>` | Change working directory |
-| `info` | Show session info (PID, SID, capacity, directory) |
-| `exit` / `quit` | Exit the tool |
-
-### Terminal Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate command history |
-| `Ctrl+C` | Interrupt current input |
-| `Ctrl+D` | Exit (on empty line) |
-| `Backspace` | Delete character |
-
-### Examples
+### Directly, without make
 
 ```bash
-# Run commands
-> ls -la
-> echo "hello world"
-> grep -r "pattern" .
-
-# View history with metadata
-> history
-
-# Replay a command (automatically changes to original directory)
-> replay 3
-
-# Search for commands
-> search grep
-
-# View statistics
-> stats
-
-# Change directory
-> cd /tmp
-> pwd
-
-# Session info
-> info
-
-# Exit
-> exit
+gcc -O2 -Wall -Wextra -std=c99 command_history_tool.c -o history_tool
+./history_tool
 ```
+
+Builds with **zero warnings** under `-Wall -Wextra`.
+
+### Make targets
+
+| Target | What it does |
+|---|---|
+| `make` | Compile to `./history_tool` |
+| `make run` | Compile and start the tool |
+| `make test` | Non-interactive smoke test (see its limitation below) |
+| `make clean` | Remove the binary, `history.log`, `history.csv`, `out.txt` |
+
+> `make test` pipes its input, so the tool detects `!isatty()` and reads with `fgets()`
+> instead of the line editor. That is deliberate — it is what makes the tool scriptable —
+> but it means **`make test` cannot exercise the arrow keys, Tab completion or Ctrl+C**.
+> Test those in a real terminal.
 
 ---
 
-## 📊 Enhanced Log Format
+## Commands
 
-The `history.log` file now includes additional fields:
+| Command | Description |
+|---|---|
+| `<command>` | Run it and record how it behaved |
+| `cmd1 \| cmd2` | Pipeline (linux mode) |
+| `cmd > f`, `cmd >> f`, `cmd < f` | Redirection (linux mode) |
+| `!!` | Rerun the previous command |
+| `cd <dir>` | Change directory — built-in, because a child's `chdir()` dies with the child |
+| `pwd` | Print the working directory |
+| `history [--failed\|--slow]` | List recorded commands, optionally filtered |
+| `replay <id>` | Rerun a command and diff it against its previous run |
+| `retry <n> <cmd>` | Run up to *n* times, stopping at the first success |
+| `timeout <sec> <cmd>` | Kill the command if it exceeds *sec* seconds |
+| `search <keyword>` | Find commands containing a keyword |
+| `stats` | Usage, slowest, heaviest, failure rate, flaky commands |
+| `export <file.csv>` | Write the whole history as CSV |
+| `mode [linux\|shell]` | Show or switch execution mode |
+| `help` | Command list |
+| `exit` | Quit |
 
-```
-id|timestamp|duration_ms|cpu_user_ms|cpu_sys_ms|exit_code|pid|sid|cwd|command
-```
+Every built-in is reachable with **no argument** — a bare `replay` prints its usage rather than
+trying to `execvp()` a program called `replay`.
 
-**Example:**
-```
-1|1727764212|45.23|12.45|3.21|0|12345|12345|/home/user|ls -la
-2|1727764225|1200.50|15.30|2.10|1|12346|12345|/home/user|cat nofile.txt
-3|1727764240|12.00|2.50|0.80|0|12347|12345|/tmp|echo hello
-```
+### Line editing
 
-**Fields:**
-- `id`: Sequential command ID
-- `timestamp`: Unix epoch time
-- `duration_ms`: Wall-clock time (milliseconds)
-- `cpu_user_ms`: CPU time in user space (NEW)
-- `cpu_sys_ms`: CPU time in kernel space (NEW)
-- `exit_code`: Command exit status
-- `pid`: Process ID of executed command (NEW)
-- `sid`: Session ID of tool instance (NEW)
-- `cwd`: Working directory when executed (NEW)
-- `command`: Full command line
+| Key | Action |
+|---|---|
+| Up / Down | Recall previous and next commands |
+| Left / Right | Move the cursor inside the line |
+| Home / End | Jump to line start or end (also Ctrl-A / Ctrl-E) |
+| Tab | Complete a command name (first word) or a filename (later words) |
+| Backspace / Delete | Erase behind or ahead of the cursor |
+| Ctrl-K | Delete to end of line |
+| Ctrl-L | Clear the screen and redraw |
+| Ctrl-C | Abandon the current line at the prompt; kill the running command during execution |
+| Ctrl-D | Exit on an empty line |
 
----
-
-## 🧪 Testing
-
-### Test Cases
-
-| Test | Command | Expected Result |
-|------|---------|-----------------|
-| Valid command | `echo hello` | Output shown, exit=0, CPU time logged |
-| Invalid command | `foobar123` | "command not found", exit=127 |
-| Quoted arguments | `echo "hello world"` | Parses correctly, outputs with space |
-| Escaped characters | `echo hello\ world` | Parses correctly |
-| Directory tracking | `cd /tmp` then `pwd` | Logs `/tmp` as cwd |
-| Replay with cd | `replay 5` (ran in /tmp) | Changes to /tmp, runs, changes back |
-| Security blacklist | `rm -rf /` | Blocked with security warning |
-| Arrow key history | Press `↑` | Previous command loaded |
-| Process groups | Run `sleep 10`, press Ctrl+C | Child process terminated |
-| Dynamic growth | Run 150+ commands | History capacity grows automatically |
-| Session tracking | Run `info` | Shows PID and Session ID |
+Tab completion is hand-rolled, not GNU readline: `opendir`/`readdir` for filenames, a `PATH` scan
+with `access(X_OK)` for command names, longest-common-prefix insertion, and a capped candidate
+list (`LIST_MAX`) because on WSL the inherited `PATH` contains all of System32.
 
 ---
 
-## 📈 Performance Metrics
+## Execution modes
 
-The tool now tracks three types of time:
+| Mode | What runs the line |
+|---|---|
+| `linux` (default) | **This tool** parses the line and calls `fork` / `execvp` / `pipe` / `dup2` itself |
+| `shell` | The line is handed to `sh -c`, so globs and `$VARS` expand |
 
-1. **Wall-clock time** (`duration_ms`)
-   - Real elapsed time from start to finish
-   - Includes I/O wait, sleep, etc.
-
-2. **CPU user time** (`cpu_user_ms`)
-   - Time spent executing user-space code
-   - Excludes kernel calls and I/O wait
-
-3. **CPU system time** (`cpu_sys_ms`)
-   - Time spent in kernel-space (system calls)
-   - Includes file I/O, process management
-
-**Example Analysis:**
 ```
-Command: grep -r "pattern" /large/directory
-Wall: 5000ms | CPU User: 300ms | CPU Sys: 200ms
-→ Mostly I/O bound (4500ms waiting for disk)
+[linux] ~/proj> echo *.c
+*.c                                  <- literal, no globbing: the tool does not expand
+[linux] ~/proj> mode shell
+[shell] ~/proj> echo *.c
+command_history_tool.c               <- sh expanded the glob
+[shell] ~/proj> echo $HOME
+/home/pizza
 ```
+
+Shell mode is implemented as a **degenerate one-stage pipeline** (`sh -c <line>`), so timing,
+`wait4` resource collection, signal forwarding, timeout and logging are the *same* code path in
+both modes. Only the argv differs.
+
+Use `linux` mode for the demo: it is the mode that actually demonstrates the system calls.
 
 ---
 
-## 🔒 Security Features
+## Log file format
 
-### Command Blacklist
-Automatically blocks dangerous patterns:
-- `rm -rf /`
-- `rm -rf /*`
-- Fork bombs: `:(){ :|:& };:`
-- `dd if=/dev/zero of=/dev/sda`
-- `mkfs`
-
-### Path Validation
-- Resolves symlinks with `realpath()`
-- Checks execute permission with `access(X_OK)`
-- Prevents path traversal attacks
-
-### Warnings
-- Alerts when accessing sensitive files (`/etc/shadow`, `/etc/passwd`)
-
----
-
-## 🛠️ Architecture Improvements
-
-### Original Design
-```
-Fixed array (MAX_HISTORY=100)
-Simple whitespace parsing
-No process groups
-Wall-clock time only
-No directory tracking
-No session info
-No security checks
-Basic line input
-```
-
-### Enhanced Design
-```
-Dynamic array (realloc, no limit)
-Quote-aware parser
-Process groups (setpgid)
-Wall + CPU time (getrusage)
-Directory tracking (getcwd/chdir)
-Session tracking (getpid/getsid)
-Blacklist + path validation
-Raw mode terminal (arrow keys)
-```
-
----
-
-## 📚 Code Structure
+`history.log`, plain text, one entry per line, `|`-separated, with the command **last** so that it
+may itself contain `|`:
 
 ```
-command_history_tool.c
-├── Data Structures
-│   └── HistoryEntry (extended with CPU time, PID, SID, CWD)
-├── Dynamic Memory
-│   ├── init_history()
-│   ├── grow_history()
-│   └── free_history()
-├── File I/O
-│   ├── load_history_from_file()
-│   └── save_entry_to_file()
-├── Command Parsing
-│   ├── parse_command() (quote-aware)
-│   └── free_args()
-├── Security
-│   ├── validate_command() (blacklist)
-│   └── resolve_command_path() (realpath)
-├── Execution
-│   └── execute_command() (process groups, CPU time)
-├── Built-in Commands
-│   ├── cmd_history()
-│   ├── cmd_replay()
-│   ├── cmd_search()
-│   ├── cmd_stats()
-│   ├── cmd_cd()
-│   └── cmd_info()
-├── Terminal Control
-│   ├── enable_raw_mode()
-│   ├── disable_raw_mode()
-│   └── read_line_with_history() (arrow keys)
-├── Signal Handling
-│   ├── setup_signal_handlers()
-│   ├── sigint_handler()
-│   └── sigchld_handler()
-└── main()
+id|timestamp|wall_ms|exit_code|user_ms|sys_ms|max_rss_kb|command
+1|1791429312|4.94|0|0.00|3.78|7236|echo hello
+3|1791429313|8.33|0|7.83|2.52|8016|ls | wc -l
 ```
 
----
+Line 3 has **9** `|`-separated fields, not 8. That is correct and intentional: the parser splits on
+the first seven `|` and treats the remainder as the verbatim command, which is what lets pipelines
+survive a save/load round-trip.
 
-## 🎓 Learning Outcomes
+| Field | Source |
+|---|---|
+| `timestamp` | `time(NULL)` |
+| `wall_ms` | `clock_gettime(CLOCK_MONOTONIC)` delta |
+| `exit_code` | `WEXITSTATUS`; `124` for timeout, `127` for exec failure, `130` for Ctrl+C |
+| `user_ms`, `sys_ms`, `max_rss_kb` | `struct rusage` from `wait4()` |
+| `command` | The raw command line |
 
-This project demonstrates:
+**The log path is resolved to an absolute path once at startup** (`log_path_init()`), before any
+command can run. A relative `history.log` would silently start appending to a different file in
+every directory you `cd` into, scattering and effectively losing history.
 
-1. **Process Management**: `fork()`, `execvp()`, `waitpid()`, process groups
-2. **System Calls**: Low-level POSIX API usage
-3. **Memory Management**: Dynamic allocation, `realloc()`, avoiding leaks
-4. **Signal Handling**: `sigaction()`, asynchronous events
-5. **Terminal Control**: Raw mode, `termios`, line editing
-6. **File I/O**: Low-level `open()`/`read()`/`write()`
-7. **Time Measurement**: `clock_gettime()`, `getrusage()`, CPU vs wall time
-8. **Security**: Path validation, command filtering
-9. **Parsing**: Tokenization, quote handling, state machines
-10. **Environment**: Working directory, environment variables
-
----
-
-## 🔄 Future Extensions
-
-- **I/O Redirection**: `dup2()` for `>`, `<`, `>>`
-- **Pipes**: `pipe()` for command pipelines
-- **Background Jobs**: `&` support with job control
-- **Command Tags**: Manual tagging (`#deploy`, `#debug`)
-- **Range Replay**: `replay 5-10`
-- **Export CSV**: Statistics export for analysis
-- **Performance Alerts**: Warn when duration >> average
-- **Multiple Sessions**: Concurrent session support
+`export` is different: it writes to the path you give it, relative to the current directory, which
+is the shell-like behaviour you would expect from an explicit filename.
 
 ---
 
-## 📄 License
+## System calls used
 
-This is a course project for Operating Systems. Feel free to use and modify.
+| System call | Header | Purpose here |
+|---|---|---|
+| `fork()` | `<unistd.h>` | One child per pipeline stage |
+| `execvp()` | `<unistd.h>` | Replace the child with the requested program |
+| `wait4()` | `<sys/wait.h>`, `<sys/resource.h>` | Wait for a child **and** get its `rusage` |
+| `pipe()` | `<unistd.h>` | Connect pipeline stages |
+| `dup2()` | `<unistd.h>` | Attach pipe ends or files to stdin/stdout |
+| `open()` / `read()` / `write()` / `close()` | `<fcntl.h>`, `<unistd.h>` | Log I/O and redirection |
+| `chdir()` / `getcwd()` | `<unistd.h>` | The `cd` and `pwd` built-ins, and the prompt |
+| `sigaction()` | `<signal.h>` | Install the parent's `SIGINT` and `SIGALRM` handlers |
+| `signal()` | `<signal.h>` | Reset `SIGINT`/`SIGALRM`/`SIGQUIT`/`SIGTERM` to `SIG_DFL` in children |
+| `kill()` | `<signal.h>` | Signal the whole process group |
+| `alarm()` | `<unistd.h>` | Arm the timeout |
+| `setpgid()` | `<unistd.h>` | Give each pipeline its own process group |
+| `_exit()` | `<unistd.h>` | Leave a failed child without running atexit handlers |
+| `clock_gettime()` | `<time.h>` | Wall-clock timing |
+| `time()` | `<time.h>` | Log timestamps |
+| `tcgetattr()` / `tcsetattr()` | `<termios.h>` | Raw mode for the line editor |
+| `select()` | `<sys/select.h>` | Timed read, to tell a bare Escape from an arrow sequence |
+| `isatty()` | `<unistd.h>` | Fall back to `fgets()` when stdin is a pipe |
+| `opendir()` / `readdir()` / `closedir()` | `<dirent.h>` | Filename tab completion |
+| `access()` | `<unistd.h>` | Executable check during `PATH` completion |
+| `stat()` | `<sys/stat.h>` | Mark completed directories with a trailing `/` |
+
+Not used: `waitpid`, `execlp`, `ioctl`, `getrusage`. `wait4()` supersedes the first and last.
 
 ---
 
-## 👨‍💻 Author
+## Design notes
 
-Enhanced implementation with 8 major improvements over the original design document.
+**Why `cd` must be a built-in.** `cd` changes the working directory of the *calling* process. Run
+it in a forked child and the directory change vanishes when the child exits.
+
+**Pipelines.** For `a | b`: create a pipe, fork per stage, and in each child `dup2()` the pipe end
+onto stdout (left side) or stdin (right side). Every process closes every unused pipe end, or the
+reader never sees EOF and the tool hangs.
+
+**Exit code of a pipeline** is the **last** stage's status, matching shell convention. CPU times are
+summed across stages; peak memory is the maximum.
+
+**Ctrl+C handling.** Children get their own process group via `setpgid()`. Both parent and child
+call it — the child's call closes the race where a signal arrives between `fork()` and the parent's
+`setpgid()`. The parent's `SIGINT` handler forwards the signal to `-pgid`, so Ctrl+C kills the
+running command and not the tool. `g_pgid` is cleared back to 0 after the wait loop: a stale group
+id would let a later Ctrl+C signal an unrelated process group that reused the number.
+
+**Signal handlers are async-signal-safe.** They only set a `volatile sig_atomic_t` flag and call
+`kill()`. No `printf` — that is not safe inside a handler.
+
+**Timeout.** The parent calls `alarm(n)` before waiting. If `SIGALRM` fires, the handler sets
+`g_timed_out` and calls `kill(-pgid, SIGKILL)`. The run is logged with exit code `124`.
+
+**Redirect vs pipe precedence.** File redirections are applied *after* the pipe wiring, so
+`ls | grep x > out` writes to `out` rather than to the pipe — the same precedence a real shell uses.
+
+**Replay diff.** `replay <id>` snapshots the old entry into a local copy *before* running, because
+`hist_record()` may `realloc()` the history array and invalidate any pointer into it. It then
+prints the change in exit code, wall time (with a percentage delta), CPU time and peak memory.
+
+**Flaky detection.** A base command is flagged flaky if its history contains both exit code `0` and
+non-zero results. `stats` reports passed/failed counts for each.
+
+**Quoting.** The tokenizer handles single quotes (literal), double quotes (allowing `\"`, `\\`,
+`\$`, `` \` ``) and backslash escapes outside quotes. It also splits operators written without
+spaces, so `echo hi>out.txt` parses the same as `echo hi > out.txt`.
 
 ---
 
-**Build Date:** 2026-10-05  
-**Version:** 2.0 (Enhanced)  
-**Lines of Code:** ~900
+## Demo script
+
+1. `ls`, `echo hello` → show the per-command summary line (exit, wall, CPU, memory)
+2. `ls | wc -l` and `echo hi > out.txt` → Tier A works like a real shell
+3. `foobar123` → "command not found", exit `127` logged
+4. `sleep 30` then Ctrl+C → the command dies, the tool survives, exit `130` logged
+5. `timeout 2 sleep 30` → killed at ~2 s, logged as exit `124`
+6. `timeout 2 sh -c "sleep 30 & sleep 30 & wait"` → the **whole process group** dies
+7. Compile something heavy → show real CPU time and peak RSS in the log
+8. `replay <id>` → the diff against the previous run
+9. `retry 3 false` → three attempts, then a failure report
+10. `stats` → most used, slowest, heaviest, failure rate, flaky warnings
+11. `mode shell` → `echo *.c` now expands; `mode linux` → it does not
+12. Up / Down arrows, `←` `→`, Home / End, Tab, Ctrl-K, Ctrl-L
+13. `export report.csv` → open it in a spreadsheet
+14. `exit`, restart → history is reloaded from `history.log`
+
+---
+
+## Verified behaviour
+
+All of the following were tested on WSL Ubuntu against a clean `-Wall -Wextra` build:
+
+| Case | Result |
+|---|---|
+| `echo hello` | exit `0` logged with CPU and RSS |
+| `foobar123` | "command not found", exit `127` |
+| `cd /tmp` then `pwd` | Directory really changed; prompt followed |
+| `ls \| wc -l` | Correct count, no hang, stored intact with its `\|` |
+| `echo hi > out.txt` then `cat out.txt` | File contained `hi` |
+| `cd` + logging | All entries stayed in the project's `history.log`; no stray `/tmp/history.log` |
+| `sleep 30` + Ctrl+C | Command killed (exit `130`), tool survived |
+| Ctrl+C on a pipeline | Both stages killed |
+| `timeout 2 …` with background children | Whole process group killed; no survivors |
+| `retry 3 false` | 3 attempts, then failure report |
+| `replay` valid / invalid / bare | Diff printed / graceful error / usage message |
+| Bare `search`, `retry`, `timeout`, `history` | Usage messages, never `execvp`'d |
+| Restart | Previous history reloaded |
+| Empty input | Prompt returned, nothing logged |
+| `!!` | Expanded to the previous command and ran it |
+| Flaky detection | Alternating-exit command flagged with passed/failed counts |
+| `mode` toggle | Shell mode expanded `*.c` and `$HOME`; linux mode did not |
+| CSV export | Every row parsed by Python's `csv` with 9 fields |
+| Up / Down / Left / Right / Home / End / Delete | Verified over a real pty |
+| Ctrl-A / Ctrl-E / Ctrl-K / Ctrl-L / Ctrl-C / Ctrl-D | Verified over a real pty |
+| Tab completion | `ech⇥` → `echo`; `cat Make⇥` → `cat Makefile` |
+
+---
+
+## Known limitations
+
+- **No globbing or variable expansion in linux mode.** That is what `mode shell` is for.
+- **No shell scripting**: no `if` / `for`, no variables, no `&&` / `||`, no `;` chaining. A `;`
+  inside a quoted string is fine and is passed through to the program.
+- **`timeout` logs the command it ran, not the wrapper.** `timeout 2 sleep 10` is recorded as
+  `sleep 10`, so `replay`ing that entry reruns it *without* a time limit.
+- **Multi-line commands are not supported**; one line is one command.
+- **The editor uses a 50 ms `select()` timeout** to tell a bare Escape from an arrow sequence, so a
+  lone Escape press has a barely perceptible delay.
+
+---
+
+## Files
+
+```
+proj/
+├── command_history_tool.c   the whole tool
+├── Makefile                 all / run / test / clean
+├── README.md                this file
+├── history.log              created at runtime (append-only, absolute-anchored)
+└── history.csv              created by 'export'
+```
+
+The v1 implementation is preserved in `D:\Code\OSProj\` (source, docs and a compiled
+`history_tool_v1`) as a working fallback.
