@@ -51,7 +51,7 @@ D:\Code\OS_Tet\
 │   ├── architecture.md          สถาปัตยกรรม + system calls + ฟีเจอร์ (ภาษาไทย)
 │   └── command_history_replay_proposal.md   เอกสาร proposal (ภาษาอังกฤษ)
 └── proj\
-    ├── command_history_tool.c   ตัวโปรแกรมทั้งหมด (1799 บรรทัด)
+    ├── command_history_tool.c   ตัวโปรแกรมทั้งหมด (1852 บรรทัด)
     ├── Makefile                 all / run / test / clean
     ├── README.md                คู่มือฉบับภาษาอังกฤษ
     ├── history.log              สร้างตอนรัน (ประวัติคำสั่ง)
@@ -155,7 +155,7 @@ command_history_tool.c           <- sh ขยาย glob ให้แล้ว
 > **แนะนำให้อยู่โหมด `linux` ตอนพรีเซนต์** เพราะเป็นโหมดที่แสดงให้เห็น system calls จริง ๆ
 > โหมด `shell` มีไว้แสดงเปรียบเทียบว่าอะไรคือสิ่งที่เครื่องมือทำเอง อะไรคือสิ่งที่ shell ทำให้
 
-**โหมด shell ไม่ได้ทำให้ฟีเจอร์หายไป** — `history`, `stats`, `replay`, `search`, `retry`,
+**โหมด shell ไม่ได้ทำให้ฟีเจอร์หายไป** — `history`, `stats`, `replay`, `edit`, `search`, `retry`,
 `timeout`, `export`, `cd`, `!!`, `help` ยังใช้ได้ครบ เพราะถูกตรวจก่อนส่งเข้า shell
 และยังจับเวลา/วัดหน่วยความจำเหมือนเดิม เพราะ shell mode ถูกทำให้เป็น pipeline ขั้นเดียว
 (`sh -c <บรรทัด>`) ใช้โค้ดชุดเดียวกันทั้งหมด
@@ -176,6 +176,7 @@ command_history_tool.c           <- sh ขยาย glob ให้แล้ว
 | `history --failed` | แสดงเฉพาะคำสั่งที่ล้มเหลว |
 | `history --slow` | แสดง 10 คำสั่งที่ช้าที่สุด |
 | `replay <id>` | รันคำสั่งเดิมซ้ำ แล้วเทียบกับการรันครั้งก่อน |
+| `edit <id>` | ดึงคำสั่งเก่ามาวางบน prompt **โดยไม่รัน** เพื่อแก้ให้ถูกแล้วค่อยกด Enter |
 | `retry <n> <cmd>` | รันสูงสุด n ครั้ง หยุดทันทีที่สำเร็จ |
 | `timeout <sec> <cmd>` | ฆ่าคำสั่งถ้ารันเกิน sec วินาที |
 | `search <keyword>` | ค้นหาคำสั่งที่มีคำนี้ |
@@ -244,6 +245,12 @@ wall time : 6ms -> 5ms  (-7.5%)
 cpu u/s   : 0/4ms -> 0/5ms
 peak mem  : 7220KB -> 7568KB
 
+[linux] ~/proj> edit 3
+[Loaded #3 - edit it and press Enter]
+[linux] ~/proj> gcc -O2 main.c -o app -Wall
+                                       ↑ เคอร์เซอร์อยู่ตรงนี้ ยังไม่ได้รันอะไร
+                                       แก้เสร็จแล้วค่อยกด Enter
+
 [linux] ~/proj> stats
 === Command Statistics ===
 Total commands   : 15
@@ -283,12 +290,13 @@ Flaky commands (both passed and failed):
 6. `timeout 2 sh -c "sleep 30 & sleep 30 & wait"` → ตาย **ยกทั้ง process group**
 7. รันคำสั่งหนัก ๆ (เช่น compile) → โชว์เวลา CPU และแรมจริง
 8. `replay <id>` → โชว์ผลต่างจากการรันครั้งก่อน
-9. `retry 3 false` → ลอง 3 ครั้ง แล้วรายงานความล้มเหลว
-10. `stats` → ช้าสุด / ใช้บ่อยสุด / อัตราล้มเหลว / flaky
-11. `mode shell` → `echo *.c` ขยายglob; `mode linux` → ไม่ขยาย
-12. ปุ่มลูกศร, `Home`/`End`, `Tab`, `Ctrl-K`, `Ctrl-L`
-13. `export report.csv` → เปิดดูใน spreadsheet
-14. `exit` แล้วเปิดใหม่ → ประวัติยังอยู่ครบ
+9. `edit <id>` → ดึงคำสั่งที่พิมพ์ผิดมาวางบน prompt แก้ให้ถูก **โดยที่ยังไม่รัน**
+10. `retry 3 false` → ลอง 3 ครั้ง แล้วรายงานความล้มเหลว
+11. `stats` → ช้าสุด / ใช้บ่อยสุด / อัตราล้มเหลว / flaky
+12. `mode shell` → `echo *.c` ขยายglob; `mode linux` → ไม่ขยาย
+13. ปุ่มลูกศร, `Home`/`End`, `Tab`, `Ctrl-K`, `Ctrl-L`
+14. `export report.csv` → เปิดดูใน spreadsheet
+15. `exit` แล้วเปิดใหม่ → ประวัติยังอยู่ครบ
 
 ---
 
@@ -342,6 +350,7 @@ export report.csv
 |---|---|
 | **โหมด linux ไม่ขยาย glob และ `$VAR`** | ใช้ `mode shell` — นี่คือเหตุผลที่มีโหมดนี้ |
 | **ไม่รองรับ shell scripting** — ไม่มี `if` / `for`, ไม่มีตัวแปร, ไม่มี `&&` / `\|\|`, ไม่มี `;` | ถ้าจำเป็นต้องใช้ ให้สลับไป `mode shell` |
+| **`edit` ใช้ได้เฉพาะตอนรันในเทอร์มินัลจริง** | ถ้า stdin เป็น pipe จะไม่มีตัวแก้ไขบรรทัดให้วางข้อความ — เครื่องมือบอกตรง ๆ ว่า `edit: needs an interactive terminal` ไม่เงียบหายไปเฉย ๆ |
 | **`timeout` บันทึกคำสั่งที่รัน ไม่ใช่ตัว wrapper** | `timeout 2 sleep 10` ถูกบันทึกเป็น `sleep 10` — ดังนั้น `replay` รายการนั้นจะรันใหม่ **โดยไม่มี timeout** |
 | **ไม่รองรับคำสั่งหลายบรรทัด** | 1 บรรทัด = 1 คำสั่ง |
 | **กด Escape เฉย ๆ จะหน่วงเล็กน้อย** | เครื่องมือรอ 50ms ด้วย `select()` เพื่อแยกว่าเป็น Escape เดี่ยวหรือเป็นลูกศร — เป็นพฤติกรรมที่ตั้งใจ |

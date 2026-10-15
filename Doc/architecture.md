@@ -3,7 +3,7 @@
 เอกสารฉบับนี้อธิบาย **สถาปัตยกรรม**, **รายละเอียดการทำงานแต่ละชั้น**, **system calls ทั้งหมดที่ใช้**
 และ **ฟีเจอร์** ของโปรแกรม
 
-> ไฟล์เดียว: `proj/command_history_tool.c` (1799 บรรทัด) — ภาษา C, POSIX, ไม่มีไลบรารีภายนอก
+> ไฟล์เดียว: `proj/command_history_tool.c` (1852 บรรทัด) — ภาษา C, POSIX, ไม่มีไลบรารีภายนอก
 
 ---
 
@@ -54,7 +54,7 @@ flowchart TD
     end
 
     subgraph L7["ชั้นที่ 7 — built-in"]
-        D["cmd_history / cmd_replay / cmd_search<br/>cmd_stats / cmd_retry / cmd_export<br/>cmd_mode / cd / pwd / !!"]
+        D["cmd_history / cmd_replay / cmd_edit / cmd_search<br/>cmd_stats / cmd_retry / cmd_export<br/>cmd_mode / cd / pwd / !!"]
     end
 
     A0 --> A1
@@ -160,7 +160,7 @@ typedef struct {
 | `raw_disable()` | คืนค่า terminal เดิม |
 | `ed_refresh()` | วาดบรรทัดใหม่: `\r` + prompt + buffer + `\x1b[K` (ลบถึงท้ายบรรทัด) + `\x1b[nD` (ถอยเคอร์เซอร์กลับ) |
 | `read_byte_timeout()` | อ่าน 1 byte โดยมี timeout ผ่าน `select()` — กัน `EINTR` ด้วย |
-| `read_line()` | loop หลัก รับ byte ทีละตัว ตีความทุกปุ่ม |
+| `read_line()` | loop หลัก รับ byte ทีละตัว ตีความทุกปุ่ม — รับพารามิเตอร์ `preload` เพื่อวางข้อความล่วงหน้า (ใช้โดย `edit`) |
 
 **ความหมายของ flag ที่ปิด:**
 
@@ -316,6 +316,7 @@ if (g_count >= g_cap) hist_grow();   /* แล้วค่อย realloc */
 | `cmd_history()` | แสดงประวัติ รองรับ `--failed` และ `--slow` |
 | `find_previous_same()` | หาการรันครั้งก่อนของคำสั่งเดียวกัน (ใช้โดย `replay`) |
 | `cmd_replay()` | รันซ้ำ + แสดงผลต่าง |
+| `cmd_edit()` | คืนสำเนาคำสั่งเก่าให้ `main()` ส่งเป็น `preload` — **ไม่รัน** |
 | `cmd_search()` | ค้นหาด้วยคำค้น |
 | `base_cmd()` | ตัดเอาเฉพาะคำแรกของคำสั่ง (ใช้จัดกลุ่มสถิติและหา flaky) |
 | `cmd_stats()` | คำนวณสถิติและตรวจจับ flaky |
@@ -488,6 +489,7 @@ sequenceDiagram
 | Line editor: `↑ ↓ ← → Home End Backspace Delete Ctrl-A/E/K/L/C/D` | `tcgetattr()`, `tcsetattr()`, `read()`, `write()`, `select()` |
 | Tab completion (ชื่อคำสั่ง + ชื่อไฟล์) | `opendir()`, `readdir()`, `access()`, `stat()` |
 | สลับโหมด `linux` / `shell` | `execvp("sh", "-c", ...)` |
+| `edit <id>` — ดึงคำสั่งเก่ามาวางบน prompt โดยไม่รัน | ไม่มี syscall ใหม่: ส่ง `preload` เข้า `read_line()` แล้วให้ `ed_refresh()` วาด |
 
 ### 🚫 ไม่ทำ
 

@@ -1093,10 +1093,15 @@ static void ed_complete(char *buf, int *len, int *pos)
  * Read one line with editing. Returns a malloc'd string the caller frees, or
  * NULL on EOF.
  *
+ * preload, when non-NULL, is drawn on the prompt line as if the user had typed
+ * it, with the cursor at the end and nothing executed yet. That is what makes
+ * 'edit <id>' possible: the caller seeds the editor instead of the shell.
+ *
  * Falls back to plain fgets() when stdin is not a terminal, which keeps piped
- * input and scripted testing working.
+ * input and scripted testing working. That path has no editor to seed, so a
+ * preload is ignored there - cmd_edit() refuses rather than pretend.
  */
-static char *read_line(const char *prompt)
+static char *read_line(const char *prompt, const char *preload)
 {
     char  buf[MAX_LINE];
     char  saved[MAX_LINE];
@@ -1116,7 +1121,14 @@ static char *read_line(const char *prompt)
 
     raw_enable();
     hist_idx = g_count;
-    out_str(prompt);
+
+    if (preload && *preload) {
+        snprintf(buf, sizeof buf, "%s", preload);
+        len = pos = (int)strlen(buf);
+        ed_refresh(prompt, plen, buf, len, pos);
+    } else {
+        out_str(prompt);
+    }
 
     for (;;) {
         unsigned char raw_byte;
@@ -1301,6 +1313,7 @@ static void cmd_help(void)
     "  cd <dir>             change directory (built-in; a child cannot do this)\n"
     "  history [--failed|--slow]   list recorded commands, optionally filtered\n"
     "  replay <id>          rerun a command and diff it against its last run\n"
+    "  edit <id>            put a past command on the prompt so you can fix it\n"
     "  retry <n> <cmd>      run up to n times, stopping at the first success\n"
     "  timeout <sec> <cmd>  kill the command if it exceeds sec seconds\n"
     "  search <keyword>     find commands containing a keyword\n"
@@ -1472,6 +1485,40 @@ static void cmd_replay(const char *arg)
 
     free(before.command);
     printf("\n");
+}
+
+/* ---------------------------------------------------------- built-in: edit */
+
+/*
+ * Return a malloc'd copy of a recorded command so main() can hand it to
+ * read_line() as a preload. The command is *not* run: the user gets it on the
+ * prompt line, fixes whatever was wrong, and presses Enter.
+ *
+ * replay re-runs a command you still want; edit is for the one you got wrong.
+ */
+static char *cmd_edit(const char *arg)
+{
+    int id;
+
+    if (!arg || !*arg) { printf("usage: edit <id>\n"); return NULL; }
+    if (g_count == 0)  { printf("edit: no history yet\n"); return NULL; }
+
+    /* The preload only exists inside the termios line editor. Under a pipe
+     * read_line() uses fgets() and would silently drop it, so say so instead
+     * of looking like edit did nothing. */
+    if (!isatty(STDIN_FILENO)) {
+        printf("edit: needs an interactive terminal (input is piped)\n");
+        return NULL;
+    }
+
+    id = atoi(arg);
+    if (id < 1 || id > g_count) {
+        printf("edit: no such id %d (history holds 1..%d)\n", id, g_count);
+        return NULL;
+    }
+
+    printf("[Loaded #%d - edit it and press Enter]\n", id);
+    return xstrdup(g_hist[id - 1].command);
 }
 
 /* -------------------------------------------------------- built-in: search */
@@ -1696,6 +1743,9 @@ static char *builtin_arg(char *cmd, const char *name)
 int main(void)
 {
     char prompt[PATH_MAX + 64];
+    /* Set by 'edit <id>', consumed by the next read_line(): the command to
+     * pre-draw on the prompt so the user can fix it before running it. */
+    char *pending = NULL;
 
     /* Line-buffer stdout even when it is a pipe. Children write straight to fd 1,
      * so a fully buffered parent interleaves its summaries after theirs and the
@@ -1718,7 +1768,9 @@ int main(void)
         int handled = 0;
 
         build_prompt(prompt, sizeof prompt);
-        line = read_line(prompt);
+        line = read_line(prompt, pending);
+        free(pending);
+        pending = NULL;
         if (!line) { printf("\n[EOF - exiting]\n"); break; }
 
         cmd = line;
@@ -1749,6 +1801,7 @@ int main(void)
         else if ((arg = builtin_arg(cmd, "history"))) { trim(arg); cmd_history(arg); handled = 1; }
         else if (strcmp(cmd, "stats") == 0)   { cmd_stats(); handled = 1; }
         else if ((arg = builtin_arg(cmd, "replay"))) { trim(arg); cmd_replay(arg); handled = 1; }
+        else if ((arg = builtin_arg(cmd, "edit")))   { trim(arg); pending = cmd_edit(arg); handled = 1; }
         else if ((arg = builtin_arg(cmd, "search"))) { trim(arg); cmd_search(arg); handled = 1; }
         else if ((arg = builtin_arg(cmd, "retry")))  { trim(arg); cmd_retry(arg);  handled = 1; }
         else if ((arg = builtin_arg(cmd, "export"))) { trim(arg); cmd_export(arg); handled = 1; }
