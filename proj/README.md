@@ -7,7 +7,7 @@ replay, retry, time-limit and analyse them.
 Implements **Tier A + B + C** of `command_history_replay_proposal.md`, plus a hand-rolled
 `termios` line editor and a `linux` / `shell` execution-mode toggle.
 
-Single C file, no external libraries: `command_history_tool.c` (1799 lines).
+Single C file, no external libraries: `command_history_tool.c` (1852 lines).
 
 ---
 
@@ -65,6 +65,7 @@ Builds with **zero warnings** under `-Wall -Wextra`.
 | `pwd` | Print the working directory |
 | `history [--failed\|--slow]` | List recorded commands, optionally filtered |
 | `replay <id>` | Rerun a command and diff it against its previous run |
+| `edit <id>` | Put a past command on the prompt **without running it**, so you can fix it first |
 | `retry <n> <cmd>` | Run up to *n* times, stopping at the first success |
 | `timeout <sec> <cmd>` | Kill the command if it exceeds *sec* seconds |
 | `search <keyword>` | Find commands containing a keyword |
@@ -215,6 +216,12 @@ id would let a later Ctrl+C signal an unrelated process group that reused the nu
 `hist_record()` may `realloc()` the history array and invalidate any pointer into it. It then
 prints the change in exit code, wall time (with a percentage delta), CPU time and peak memory.
 
+**Edit without running.** `edit <id>` returns a copy of a recorded command that `main()` passes to
+`read_line()` as a *preload*: the line editor seeds its buffer and redraws, so the text appears as if
+typed, with the cursor at the end and nothing executed. `replay` is for a command you still want;
+`edit` is for the one you got wrong. Because a preload only exists inside the `termios` editor, the
+`!isatty()` `fgets()` path rejects it with a message rather than dropping it silently.
+
 **Flaky detection.** A base command is flagged flaky if its history contains both exit code `0` and
 non-zero results. `stats` reports passed/failed counts for each.
 
@@ -234,12 +241,13 @@ spaces, so `echo hi>out.txt` parses the same as `echo hi > out.txt`.
 6. `timeout 2 sh -c "sleep 30 & sleep 30 & wait"` → the **whole process group** dies
 7. Compile something heavy → show real CPU time and peak RSS in the log
 8. `replay <id>` → the diff against the previous run
-9. `retry 3 false` → three attempts, then a failure report
-10. `stats` → most used, slowest, heaviest, failure rate, flaky warnings
-11. `mode shell` → `echo *.c` now expands; `mode linux` → it does not
-12. Up / Down arrows, `←` `→`, Home / End, Tab, Ctrl-K, Ctrl-L
-13. `export report.csv` → open it in a spreadsheet
-14. `exit`, restart → history is reloaded from `history.log`
+9. `edit <id>` → a mistyped command lands back on the prompt, **not yet run**, ready to fix
+10. `retry 3 false` → three attempts, then a failure report
+11. `stats` → most used, slowest, heaviest, failure rate, flaky warnings
+12. `mode shell` → `echo *.c` now expands; `mode linux` → it does not
+13. Up / Down arrows, `←` `→`, Home / End, Tab, Ctrl-K, Ctrl-L
+14. `export report.csv` → open it in a spreadsheet
+15. `exit`, restart → history is reloaded from `history.log`
 
 ---
 
@@ -260,6 +268,9 @@ All of the following were tested on WSL Ubuntu against a clean `-Wall -Wextra` b
 | `timeout 2 …` with background children | Whole process group killed; no survivors |
 | `retry 3 false` | 3 attempts, then failure report |
 | `replay` valid / invalid / bare | Diff printed / graceful error / usage message |
+| `edit <id>` | Command appeared on the prompt, unrun; typing appended to it; Enter ran it once and logged one new entry. `edit` itself is never logged |
+| `edit` bad id / bare / piped stdin | Graceful error / usage message / "needs an interactive terminal" |
+| `edit` then Up then Down | The preloaded line survived history recall and still ran |
 | Bare `search`, `retry`, `timeout`, `history` | Usage messages, never `execvp`'d |
 | Restart | Previous history reloaded |
 | Empty input | Prompt returned, nothing logged |
@@ -281,6 +292,8 @@ All of the following were tested on WSL Ubuntu against a clean `-Wall -Wextra` b
 - **`timeout` logs the command it ran, not the wrapper.** `timeout 2 sleep 10` is recorded as
   `sleep 10`, so `replay`ing that entry reruns it *without* a time limit.
 - **Multi-line commands are not supported**; one line is one command.
+- **`edit` needs a real terminal.** Its preload lives in the `termios` line editor, so under piped
+  stdin the command says so instead of silently doing nothing.
 - **The editor uses a 50 ms `select()` timeout** to tell a bare Escape from an arrow sequence, so a
   lone Escape press has a barely perceptible delay.
 

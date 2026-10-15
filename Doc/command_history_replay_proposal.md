@@ -109,6 +109,9 @@ to show what the tool itself does versus what a shell does.
 - [x] **Tab completion**, hand-rolled (no GNU readline): `PATH` scan with `access(X_OK)` for the
       first word, `opendir`/`readdir` filenames otherwise, longest-common-prefix insertion
 - [x] **`mode linux` / `mode shell` toggle** — see §8
+- [x] **`edit <id>`** — load a recorded command onto the prompt *without running it*, so a mistyped
+      command can be fixed in place. Implemented as a preload argument to the line editor, so it
+      adds no new system call
 
 > **Why not GNU readline.** Linking readline would hide the terminal control behind a library and
 > remove `tcgetattr` / `tcsetattr` / `select` from the system-call table this project is graded on.
@@ -141,6 +144,7 @@ to show what the tool itself does versus what a shell does.
 | `history` | Show all recorded commands |
 | `history --failed` / `--slow` | Filtered views (Tier C) |
 | `replay <id>` | Rerun a command and compare with its previous run |
+| `edit <id>` | Put a past command on the prompt **without running it**, so you can fix it (Tier D) |
 | `retry <n> <cmd>` | Run up to *n* times until it succeeds |
 | `timeout <sec> <cmd>` | Kill the command if it runs too long |
 | `search <keyword>` | Find commands containing a keyword |
@@ -196,7 +200,7 @@ flowchart TD
     A1 -- "linux" --> B[Parse: quotes, pipes, redirects, args]
     A2 --> C
     B --> C{Built-in?}
-    C -- "cd / history / replay / search / stats / mode / exit" --> D[Handle in parent process]
+    C -- "cd / history / replay / edit / search / stats / mode / exit" --> D[Handle in parent process]
     C -- "external command(s)" --> E["fork() per stage<br/>(pipe + dup2 between stages)"]
     E --> F["Child: setpgid, restore signals,<br/>execvp(cmd, argv)"]
     E --> G["Parent: wait4(child)<br/>+ clock_gettime for wall time<br/>+ alarm(n) if timeout"]
@@ -281,6 +285,14 @@ size, and `TIOCGWINSZ` would only matter for wrapping long lines.
 
 **Replay diff.** Each log entry is stored with its command text. On `replay <id>`, the tool finds the most recent previous run of the same command and prints the change in exit code and duration.
 
+**Edit without running.** `replay` is for a command you still want; `edit <id>` is for the one you
+got wrong. It hands a copy of the recorded command to the line editor as a *preload*, so the text
+appears on the prompt as if typed, cursor at the end, nothing executed. The user fixes it and presses
+Enter. This reuses the existing editor — no new system call — and works with the Up/Down history
+recall, which already saves an in-progress line before walking the history. Because a preload only
+exists inside the `termios` editor, the piped-`fgets()` path reports that `edit` needs an interactive
+terminal instead of dropping the request silently.
+
 **Flaky detection.** A command is flagged *flaky* if its history contains both exit code `0` and non-zero results.
 
 **Two execution modes.** `mode linux` (the default) makes the tool parse the line itself and call
@@ -355,7 +367,7 @@ Plain text keeps the log easy to debug with `cat` / `grep` and avoids a serializ
 | Tier A: `cd`, pipes, redirects, Ctrl+C handling | ✅ Done |
 | Tier B: resource report, replay diff, timeout, retry, flaky | ✅ Done |
 | Tier C: filters, `!!`, CSV export | ✅ Done (session separation dropped — see §4) |
-| Tier D: `termios` line editor, Tab completion, mode toggle | ✅ Done |
+| Tier D: `termios` line editor, Tab completion, mode toggle, `edit <id>` preload | ✅ Done |
 
 All of §11 was executed on WSL Ubuntu against a build with **zero warnings** under
 `-Wall -Wextra -std=c99`. The interactive key bindings were verified over a real pty, since they
@@ -391,6 +403,11 @@ All cases executed on WSL Ubuntu against a build with zero warnings under `-Wall
 | `↑ ↓ ← → Home End Delete` | Line edits correctly | ✅ verified over a real pty |
 | `Ctrl-A/E/K/L/C/D` | Edit, cancel, clear, exit | ✅ verified over a real pty |
 | `Tab` | Completes commands and filenames | ✅ `ech⇥`→`echo`, `cat Make⇥`→`cat Makefile` |
+| `edit <id>` | Text lands on the prompt, nothing runs until Enter | ✅ verified over a real pty; `edit` itself is never logged |
+| `edit <id>` then modify | Appended text becomes part of the command | ✅ `edit 1` + ` ZZZ` ran `echo aaa ZZZ` |
+| `edit` bad id / bare | Graceful error / usage message | ✅ |
+| `edit` under piped stdin | Refuses instead of silently dropping the preload | ✅ `edit: needs an interactive terminal` |
+| `edit` then `↑` then `↓` | Preloaded line survives history recall | ✅ |
 
 > The interactive rows **cannot** be tested through piped input: `isatty()` deliberately switches
 > the tool to a plain `fgets()` path so that scripts and `make test` work. They were verified by
@@ -460,12 +477,13 @@ All cases executed on WSL Ubuntu against a build with zero warnings under `-Wall
 6. `timeout 2 sh -c "sleep 30 & sleep 30 & wait"` → the **whole process group** dies
 7. Run a heavy command (e.g. compile) → show CPU time and peak RSS in the log
 8. `replay` a command → show the diff against the previous run
-9. `retry 3 false` → three attempts, then a failure report
-10. `stats` → show slowest, most-used, failure rate, flaky warnings
-11. `mode shell` → `echo *.c` expands; `mode linux` → it does not
-12. Arrow keys, `Home`/`End`, `Tab`, `Ctrl-K`, `Ctrl-L` → the line editor
-13. `export report.csv` → open it in a spreadsheet
-14. Exit and restart → history is still there
+9. `edit` a mistyped command → it lands back on the prompt, **not yet run**; fix it, press Enter
+10. `retry 3 false` → three attempts, then a failure report
+11. `stats` → show slowest, most-used, failure rate, flaky warnings
+12. `mode shell` → `echo *.c` expands; `mode linux` → it does not
+13. Arrow keys, `Home`/`End`, `Tab`, `Ctrl-K`, `Ctrl-L` → the line editor
+14. `export report.csv` → open it in a spreadsheet
+15. Exit and restart → history is still there
 
 ---
 
